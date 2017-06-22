@@ -1,4 +1,3 @@
-use futures::Future;
 use mqtt::{Packet, read_packet, WritePacketExt};
 use tokio_io::codec::{Decoder, Encoder};
 use bytes::{BytesMut, BufMut};
@@ -21,7 +20,7 @@ impl Decoder for MqttCodec {
                 p = packet;
             }
             // todo: derive error
-            Err(IError::Error(e)) => return Err(Error::new(ErrorKind::Other, "oops")),
+            Err(IError::Error(_)) => return Err(Error::new(ErrorKind::Other, "oops")),
             Err(IError::Incomplete(_)) => return Ok(None),
         };
         src.split_to(len);

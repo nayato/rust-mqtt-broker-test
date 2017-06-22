@@ -10,11 +10,10 @@ extern crate tokio_service;
 
 mod codec;
 
-use std::io::{self, ErrorKind, Write};
-use mqtt::{Packet, ConnectReturnCode, QoS, WritePacketExt};
+use std::io;
+use mqtt::{Packet, ConnectReturnCode, QoS, SubscribeReturnCode, WritePacketExt};
 use tokio_proto::TcpServer;
 use tokio_proto::pipeline::ServerProto;
-use tokio_core::io::Io;
 use tokio_io::codec::{Decoder, Encoder, Framed};
 use tokio_io::{AsyncRead, AsyncWrite};
 use bytes::{BufMut, BytesMut};
@@ -30,7 +29,7 @@ impl Decoder for ProtoMqttCodec {
 
     fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
         let res = self.0.decode(src)?;
-        Ok(res.map(|p| Some(p)))
+        Ok(res.map(Some))
     }    
 }
 
@@ -39,9 +38,8 @@ impl Encoder for ProtoMqttCodec {
     type Error = io::Error;
 
     fn encode(&mut self, item: Self::Item, dst: &mut BytesMut) -> Result<(), Self::Error> {
-        match item {
-            Some(p) => {dst.writer().write_packet(&p)?; }
-            None => {}
+        if let Some(p) = item {
+            dst.writer().write_packet(&p)?;
         }
         Ok(())
     }
@@ -71,15 +69,14 @@ impl Service for DummyService {
     fn call(&self, req: Self::Request) -> Self::Future {
         println!("{:?}", req);
         let res = match req.expect("Can never be None") {
-            Packet::Connect { .. } => {
-                Some(Packet::ConnectAck { session_present: false, return_code: ConnectReturnCode::ConnectionAccepted })
-            }
-            Packet::Publish { qos, packet_id: Some(pid @ _), .. } if qos == QoS::AtLeastOnce => {
-                Some(Packet::PublishAck { packet_id: pid })
-            }
-            _ => {
-                None
-            }
+            Packet::Connect { .. } => Some(Packet::ConnectAck { session_present: false, return_code: ConnectReturnCode::ConnectionAccepted }),
+            Packet::Publish { qos, packet_id: Some(pid), .. } if qos == QoS::AtLeastOnce => Some(Packet::PublishAck { packet_id: pid }),
+            Packet::Subscribe {packet_id, topic_filters} => Some(Packet::SubscribeAck {
+                packet_id,
+                status: topic_filters.iter().map(|_| SubscribeReturnCode::Success(QoS::AtLeastOnce)).collect()
+            }),
+            Packet::Unsubscribe {packet_id, ..} => Some(Packet::UnsubscribeAck {packet_id}),
+            _ => None
         };
         future::ok(res).boxed()
     }
