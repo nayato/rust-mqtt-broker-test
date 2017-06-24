@@ -16,7 +16,7 @@ impl Decoder for MqttCodec {
         let p: Packet;
         match read_packet(src) {
             Ok((rest, packet)) => {
-                len = src.len() - rest.len();
+                len = (rest.as_ptr() as usize) - (src.as_ptr() as usize);
                 p = packet;
             }
             // todo: derive error
