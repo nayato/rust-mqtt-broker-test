@@ -172,7 +172,7 @@ dependencies = [
 [[package]]
 name = "mqtt"
 version = "0.1.2"
-source = "git+https://github.com/nayato/rust-mqtt?branch=owned#301b60cad04239b44c101d7b147fe5a86f9c5b9f"
+source = "git+https://github.com/nayato/rust-mqtt?branch=owned#3376ec7b306454c4d69f4ad8eb93c37be1910878"
 dependencies = [
  "bitflags 0.8.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "byteorder 1.0.0 (registry+https://github.com/rust-lang/crates.io-index)",

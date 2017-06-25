@@ -106,16 +106,16 @@ impl MqttProto {
         let framed = socket.framed(codec::MqttCodec);
         let (tx, rx) = framed.split();
         let rex = rx
-            .map_err(move |e| {
-                println!("error: {:?}", e);
-                e
-            })
             .filter_map(move |req| {
                 match req {
                     Packet::Connect { .. } => Some(Packet::ConnectAck { session_present: false, return_code: ConnectReturnCode::ConnectionAccepted }),
                     Packet::Publish { qos, packet_id: Some(pid), ref payload, .. } if qos == QoS::AtLeastOnce => {
-                        println!("[{}, {}]", pid, payload.len());
+                        //println!("[{}, {}]", pid, payload.len());
                         Some(Packet::PublishAck { packet_id: pid })
+                    },
+                    Packet::Publish { qos, ref payload, .. } if qos == QoS::AtMostOnce => {
+                        //println!("[-, {}]", payload.len());
+                        Some(Packet::Publish { dup: false, retain: false, qos: QoS::AtMostOnce, topic: "abc".to_owned(), packet_id: None, payload: payload.slice_from(0) })
                     },
                     Packet::Subscribe {packet_id, topic_filters} => Some(Packet::SubscribeAck {
                         packet_id,
@@ -125,9 +125,12 @@ impl MqttProto {
                     Packet::PingRequest => Some(Packet::PingResponse),
                     _ => None
                 }
-            });
-        let server = tx.send_all(rex).then(|_| Ok(()));
-        handle.spawn(server);
+            })
+            .forward(tx)
+            .map_err(|e| { println!("error: {:?}", e); e })
+            .then(|_| Ok(()));
+        //let server = tx.send_all(rex).map_err(|e| { println!("err: {:?}", e); e }).then(|_| Ok(()));
+        handle.spawn(rex);
     }
 }
 
