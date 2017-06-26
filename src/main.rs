@@ -29,6 +29,8 @@ use futures::{Stream, Sink};
 use futures::future::Then;
 use tokio_core::net::{TcpStream, TcpListener};
 use tokio_core::reactor::{Core, Handle};
+use std::sync::Arc;
+use std::thread;
 
 use native_tls::{TlsAcceptor, Pkcs12};
 use std::io::{Read, BufReader};
@@ -117,6 +119,7 @@ fn main() {
 
 fn run() -> std::result::Result<(), std::io::Error> {
     let addr = "0.0.0.0:8113".parse().unwrap();
+    with_handle(addr, num_cpus::get(), |h| MqttProto);
     // serve(addr, /*num_cpus::get()*/ 1, |h| MqttProto);
     let server = TcpServer::new(MqttProto, addr);
     let mqtt_thread = std::thread::spawn(move || {
@@ -147,89 +150,111 @@ fn run() -> std::result::Result<(), std::io::Error> {
     Ok(())
 }
 
-// impl MqttProto {
-//     pub fn bind<Io: AsyncRead + AsyncWrite + 'static>(&self, handle: &Handle, socket: Io) {
-//         let framed = socket.framed(codec::MqttCodec);
-//         let (tx, rx) = framed.split();
-//         let rex = rx
-//             .filter_map(move |req| {
-//                 match req {
-//                     Packet::Connect { .. } => Some(Packet::ConnectAck { session_present: false, return_code: ConnectReturnCode::ConnectionAccepted }),
-//                     Packet::Publish { qos, packet_id: Some(pid), ref payload, .. } if qos == QoS::AtLeastOnce => {
-//                         //println!("[{}, {}]", pid, payload.len());
-//                         Some(Packet::PublishAck { packet_id: pid })
-//                     },
-//                     Packet::Publish { qos, ref payload, .. } if qos == QoS::AtMostOnce => {
-//                         //println!("[-, {}]", payload.len());
-//                         Some(Packet::Publish { dup: false, retain: false, qos: QoS::AtMostOnce, topic: "abc".to_owned(), packet_id: None, payload: payload.slice_from(0) })
-//                     },
-//                     Packet::Subscribe {packet_id, topic_filters} => Some(Packet::SubscribeAck {
-//                         packet_id,
-//                         status: topic_filters.iter().map(|_| SubscribeReturnCode::Success(QoS::AtLeastOnce)).collect()
-//                     }),
-//                     Packet::Unsubscribe {packet_id, ..} => Some(Packet::UnsubscribeAck {packet_id}),
-//                     Packet::PingRequest => Some(Packet::PingResponse),
-//                     _ => None
-//                 }
-//             })
-//             .forward(tx)
-//             .map_err(|e| { println!("error: {:?}", e); e })
-//             .then(|_| Ok(()));
-//         //let server = tx.send_all(rex).map_err(|e| { println!("err: {:?}", e); e }).then(|_| Ok(()));
-//         handle.spawn(rex);
-//     }
-// }
+impl MqttProto {
+    pub fn bind<Io: AsyncRead + AsyncWrite + 'static>(&self, handle: &Handle, socket: Io) {
+        let framed = socket.framed(codec::MqttCodec);
+        let (tx, rx) = framed.split();
+        let rex = rx
+            .filter_map(move |req| {
+                match req {
+                    Packet::Connect { .. } => Some(Packet::ConnectAck { session_present: false, return_code: ConnectReturnCode::ConnectionAccepted }),
+                    Packet::Publish { qos, packet_id: Some(pid), ref payload, .. } if qos == QoS::AtLeastOnce => {
+                        //println!("[{}, {}]", pid, payload.len());
+                        Some(Packet::PublishAck { packet_id: pid })
+                    },
+                    Packet::Publish { qos, ref payload, .. } if qos == QoS::AtMostOnce => {
+                        //println!("[-, {}]", payload.len());
+                        Some(Packet::Publish { dup: false, retain: false, qos: QoS::AtMostOnce, topic: "abc".to_owned(), packet_id: None, payload: payload.slice_from(0) })
+                    },
+                    Packet::Subscribe {packet_id, topic_filters} => Some(Packet::SubscribeAck {
+                        packet_id,
+                        status: topic_filters.iter().map(|_| SubscribeReturnCode::Success(QoS::AtLeastOnce)).collect()
+                    }),
+                    Packet::Unsubscribe {packet_id, ..} => Some(Packet::UnsubscribeAck {packet_id}),
+                    Packet::PingRequest => Some(Packet::PingResponse),
+                    _ => None
+                }
+            })
+            .forward(tx)
+            //.map_err(|e| { println!("error: {:?}", e); e })
+            .then(|_| Ok(()));
+        //let server = tx.send_all(rex).map_err(|e| { println!("err: {:?}", e); e }).then(|_| Ok(()));
+        handle.spawn(rex);
+    }
+}
 
 // todo from TcpServer:
 
-// fn serve<F>(addr: SocketAddr, workers: usize, new_service: F)
-//     where F: Fn(&Handle) -> MqttProto
-// {
-//     let mut core = Core::new().unwrap();
-//     let handle = core.handle();
-//     //let new_service = new_service(&handle);
-//     let listener = listener(&addr, workers, &handle).unwrap();
+    pub fn with_handle<F>(addr: SocketAddr, threads: usize, new_service: F) where
+        F: Fn(&Handle) -> MqttProto + Send + Sync + 'static,
+    {
+        let new_service = Arc::new(new_service);
+        let workers = threads;
 
-//     let server = listener.incoming().for_each(move |(socket, _)| {
-//         // Create the service
-//         let service = new_service(&handle);
+        let threads = (0..threads - 1).map(|i| {
+            let new_service = new_service.clone();
 
-//         // Bind it!
-//         service.bind(&handle, socket);
+            thread::Builder::new().name(format!("worker{}", i)).spawn(move || {
+                serve(addr, workers, &*new_service)
+            }).unwrap()
+        }).collect::<Vec<_>>();
 
-//         Ok(())
-//     });
+        serve(addr, workers, &*new_service);
 
-//     core.run(server).unwrap();
-// }
+        for thread in threads {
+            thread.join().unwrap();
+        }
+    }
 
-// fn listener(addr: &SocketAddr,
-//             workers: usize,
-//             handle: &Handle) -> io::Result<TcpListener> {
-//     let listener = match *addr {
-//         SocketAddr::V4(_) => try!(net2::TcpBuilder::new_v4()),
-//         SocketAddr::V6(_) => try!(net2::TcpBuilder::new_v6()),
-//     };
-//     configure_tcp(workers, &listener)?;
-//     listener.reuse_address(true)?;
-//     listener.bind(addr)?;
-//     listener.listen(1024).and_then(|l| {
-//         TcpListener::from_listener(l, addr, handle)
-//     })
-// }
 
-// #[cfg(unix)]
-// fn configure_tcp(workers: usize, tcp: &net2::TcpBuilder) -> io::Result<()> {
-//     use net2::unix::*;
+fn serve<F>(addr: SocketAddr, workers: usize, new_service: F)
+    where F: Fn(&Handle) -> MqttProto
+{
+    let mut core = Core::new().unwrap();
+    let handle = core.handle();
+    //let new_service = new_service(&handle);
+    let listener = listener(&addr, workers, &handle).unwrap();
 
-//     if workers > 1 {
-//         try!(tcp.reuse_port(true));
-//     }
+    let server = listener.incoming().for_each(move |(socket, _)| {
+        // Create the service
+        let service = new_service(&handle);
 
-//     Ok(())
-// }
+        // Bind it!
+        service.bind(&handle, socket);
 
-// #[cfg(windows)]
-// fn configure_tcp(_workers: usize, _tcp: &net2::TcpBuilder) -> io::Result<()> {
-//     Ok(())
-// }
+        Ok(())
+    });
+
+    core.run(server).unwrap();
+}
+
+fn listener(addr: &SocketAddr,
+            workers: usize,
+            handle: &Handle) -> io::Result<TcpListener> {
+    let listener = match *addr {
+        SocketAddr::V4(_) => try!(net2::TcpBuilder::new_v4()),
+        SocketAddr::V6(_) => try!(net2::TcpBuilder::new_v6()),
+    };
+    configure_tcp(workers, &listener)?;
+    listener.reuse_address(true)?;
+    listener.bind(addr)?;
+    listener.listen(1024).and_then(|l| {
+        TcpListener::from_listener(l, addr, handle)
+    })
+}
+
+#[cfg(unix)]
+fn configure_tcp(workers: usize, tcp: &net2::TcpBuilder) -> io::Result<()> {
+    use net2::unix::*;
+
+    if workers > 1 {
+        try!(tcp.reuse_port(true));
+    }
+
+    Ok(())
+}
+
+#[cfg(windows)]
+fn configure_tcp(_workers: usize, _tcp: &net2::TcpBuilder) -> io::Result<()> {
+    Ok(())
+}
