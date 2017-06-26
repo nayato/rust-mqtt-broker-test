@@ -119,13 +119,13 @@ fn main() {
 
 fn run() -> std::result::Result<(), std::io::Error> {
     let addr = "0.0.0.0:8113".parse().unwrap();
-    with_handle(addr, num_cpus::get(), |h| MqttProto);
     // serve(addr, /*num_cpus::get()*/ 1, |h| MqttProto);
     let server = TcpServer::new(MqttProto, addr);
     let mqtt_thread = std::thread::spawn(move || {
-        let mut tcp = TcpServer::new(MqttProto, addr);
-        tcp.threads(num_cpus::get());
-        server.serve(|| Ok(DummyService));
+        with_handle(addr, num_cpus::get(), |h| MqttProto);
+        // let mut tcp = TcpServer::new(MqttProto, addr);
+        // tcp.threads(num_cpus::get());
+        // server.serve(|| Ok(DummyService));
     });
 
     let mut file = std::fs::File::open("identity.com.pfx")?;
