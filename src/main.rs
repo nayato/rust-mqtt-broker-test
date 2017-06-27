@@ -46,7 +46,7 @@ impl Decoder for ProtoMqttCodec {
     fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
         let res = self.0.decode(src)?;
         Ok(res.map(Some))
-    }    
+    }
 }
 
 impl Encoder for ProtoMqttCodec {
@@ -93,20 +93,39 @@ impl Service for DummyService {
     fn call(&self, req: Self::Request) -> Self::Future {
         //println!("{:?}", req);
         let res = match req.expect("Can never be None") {
-            Packet::Connect { .. } => Some(Packet::ConnectAck { session_present: false, return_code: ConnectReturnCode::ConnectionAccepted }),
-            Packet::Publish { qos, packet_id: Some(pid), ref payload, .. } if qos == QoS::AtLeastOnce => {
-                Some(Packet::PublishAck { packet_id: pid })
-            },
-            Packet::Publish { qos, ref payload, .. } if qos == QoS::AtMostOnce => {
-                Some(Packet::Publish { dup: false, retain: false, qos: QoS::AtMostOnce, topic: "abc".to_owned(), packet_id: None, payload: payload.slice_from(0) })
-            },
-            Packet::Subscribe {packet_id, topic_filters} => Some(Packet::SubscribeAck {
-                packet_id,
-                status: topic_filters.iter().map(|_| SubscribeReturnCode::Success(QoS::AtLeastOnce)).collect()
+            Packet::Connect { .. } => Some(Packet::ConnectAck {
+                session_present: false,
+                return_code: ConnectReturnCode::ConnectionAccepted,
             }),
-            Packet::Unsubscribe {packet_id, ..} => Some(Packet::UnsubscribeAck {packet_id}),
+            Packet::Publish {
+                qos,
+                packet_id: Some(pid),
+                ref payload,
+                ..
+            } if qos == QoS::AtLeastOnce => Some(Packet::PublishAck { packet_id: pid }),
+            Packet::Publish { qos, ref payload, .. } if qos == QoS::AtMostOnce => {
+                Some(Packet::Publish {
+                    dup: false,
+                    retain: false,
+                    qos: QoS::AtMostOnce,
+                    topic: "abc".to_owned(),
+                    packet_id: None,
+                    payload: payload.unwrap().slice_from(0).into(),
+                })
+            }
+            Packet::Subscribe {
+                packet_id,
+                topic_filters,
+            } => Some(Packet::SubscribeAck {
+                packet_id,
+                status: topic_filters
+                    .iter()
+                    .map(|_| SubscribeReturnCode::Success(QoS::AtLeastOnce))
+                    .collect(),
+            }),
+            Packet::Unsubscribe { packet_id, .. } => Some(Packet::UnsubscribeAck { packet_id }),
             Packet::PingRequest => Some(Packet::PingResponse),
-            _ => None
+            _ => None,
         };
         future::ok(res).boxed()
     }
@@ -136,8 +155,7 @@ fn run() -> std::result::Result<(), std::io::Error> {
 
     let addr = "0.0.0.0:8883".parse().unwrap();
     let mqtts_thread = std::thread::spawn(move || {
-        let tls = tokio_tls::proto::Server::new(MqttProto,
-                                                acceptor);
+        let tls = tokio_tls::proto::Server::new(MqttProto, acceptor);
         let mut tcp = TcpServer::new(tls, addr);
         tcp.threads(num_cpus::get());
         tcp.serve(|| Ok(DummyService));
@@ -154,61 +172,92 @@ impl MqttProto {
     pub fn bind<Io: AsyncRead + AsyncWrite + 'static>(&self, handle: &Handle, socket: Io) {
         let framed = socket.framed(codec::MqttCodec);
         let (tx, rx) = framed.split();
-        let rex = rx
-            .filter_map(move |req| {
-                match req {
-                    Packet::Connect { .. } => Some(Packet::ConnectAck { session_present: false, return_code: ConnectReturnCode::ConnectionAccepted }),
-                    Packet::Publish { qos, packet_id: Some(pid), ref payload, .. } if qos == QoS::AtLeastOnce => {
-                        //println!("[{}, {}]", pid, payload.len());
-                        Some(Packet::PublishAck { packet_id: pid })
-                    },
-                    Packet::Publish { qos, ref payload, .. } if qos == QoS::AtMostOnce => {
-                        //println!("[-, {}]", payload.len());
-                        Some(Packet::Publish { dup: false, retain: false, qos: QoS::AtMostOnce, topic: "abc".to_owned(), packet_id: None, payload: payload.slice_from(0) })
-                    },
-                    Packet::Subscribe {packet_id, topic_filters} => Some(Packet::SubscribeAck {
-                        packet_id,
-                        status: topic_filters.iter().map(|_| SubscribeReturnCode::Success(QoS::AtLeastOnce)).collect()
-                    }),
-                    Packet::Unsubscribe {packet_id, ..} => Some(Packet::UnsubscribeAck {packet_id}),
-                    Packet::PingRequest => Some(Packet::PingResponse),
-                    _ => None
-                }
+        let rex = rx.filter_map(move |req| match req {
+            Packet::Connect { .. } => {
+                Some(Packet::ConnectAck {
+                    session_present: false,
+                    return_code: ConnectReturnCode::ConnectionAccepted,
+                })
+            }
+            Packet::Publish {
+                qos,
+                packet_id: Some(pid),
+                ref payload,
+                ..
+            } if qos == QoS::AtLeastOnce => Some(Packet::PublishAck { packet_id: pid }),
+            Packet::Publish { qos, ref payload, .. } if qos == QoS::AtMostOnce => {
+                Some(Packet::Publish {
+                    dup: false,
+                    retain: false,
+                    qos: QoS::AtMostOnce,
+                    topic: "abc".to_owned(),
+                    packet_id: None,
+                    payload: payload.unwrap().slice_from(0).into(),
+                })
+            }
+            Packet::Subscribe {
+                packet_id,
+                topic_filters,
+            } => {
+                Some(Packet::SubscribeAck {
+                    packet_id,
+                    status: topic_filters
+                        .iter()
+                        .map(|t| {
+                            SubscribeReturnCode::Success(if t.1 == QoS::AtMostOnce { t.1 } else { QoS::AtLeastOnce })
+                        })
+                        .collect(),
+                })
+            }
+            Packet::Unsubscribe { packet_id, .. } => Some(Packet::UnsubscribeAck { packet_id }),
+            Packet::PingRequest => Some(Packet::PingResponse),
+            _ => None,
+        });
+        // .forward(tx)
+        // //.map_err(|e| { println!("error: {:?}", e); e })
+        // .then(|_| Ok(()));
+        //handle.spawn(rex);
+        let server = tx.send_all(rex)
+            .map_err(|e| {
+                println!("err: {:?}", e);
+                e
             })
-            .forward(tx)
-            //.map_err(|e| { println!("error: {:?}", e); e })
             .then(|_| Ok(()));
-        //let server = tx.send_all(rex).map_err(|e| { println!("err: {:?}", e); e }).then(|_| Ok(()));
-        handle.spawn(rex);
+        handle.spawn(server);
     }
 }
 
 // todo from TcpServer:
 
-    pub fn with_handle<F>(addr: SocketAddr, threads: usize, new_service: F) where
-        F: Fn(&Handle) -> MqttProto + Send + Sync + 'static,
-    {
-        let new_service = Arc::new(new_service);
-        let workers = threads;
+pub fn with_handle<F>(addr: SocketAddr, threads: usize, new_service: F)
+where
+    F: Fn(&Handle) -> MqttProto + Send + Sync + 'static,
+{
+    let new_service = Arc::new(new_service);
+    let workers = threads;
 
-        let threads = (0..threads - 1).map(|i| {
+    let threads = (0..threads - 1)
+        .map(|i| {
             let new_service = new_service.clone();
 
-            thread::Builder::new().name(format!("worker{}", i)).spawn(move || {
-                serve(addr, workers, &*new_service)
-            }).unwrap()
-        }).collect::<Vec<_>>();
+            thread::Builder::new()
+                .name(format!("worker{}", i))
+                .spawn(move || serve(addr, workers, &*new_service))
+                .unwrap()
+        })
+        .collect::<Vec<_>>();
 
-        serve(addr, workers, &*new_service);
+    serve(addr, workers, &*new_service);
 
-        for thread in threads {
-            thread.join().unwrap();
-        }
+    for thread in threads {
+        thread.join().unwrap();
     }
+}
 
 
 fn serve<F>(addr: SocketAddr, workers: usize, new_service: F)
-    where F: Fn(&Handle) -> MqttProto
+where
+    F: Fn(&Handle) -> MqttProto,
 {
     let mut core = Core::new().unwrap();
     let handle = core.handle();
@@ -228,9 +277,7 @@ fn serve<F>(addr: SocketAddr, workers: usize, new_service: F)
     core.run(server).unwrap();
 }
 
-fn listener(addr: &SocketAddr,
-            workers: usize,
-            handle: &Handle) -> io::Result<TcpListener> {
+fn listener(addr: &SocketAddr, workers: usize, handle: &Handle) -> io::Result<TcpListener> {
     let listener = match *addr {
         SocketAddr::V4(_) => try!(net2::TcpBuilder::new_v4()),
         SocketAddr::V6(_) => try!(net2::TcpBuilder::new_v6()),
@@ -238,9 +285,9 @@ fn listener(addr: &SocketAddr,
     configure_tcp(workers, &listener)?;
     listener.reuse_address(true)?;
     listener.bind(addr)?;
-    listener.listen(1024).and_then(|l| {
-        TcpListener::from_listener(l, addr, handle)
-    })
+    listener
+        .listen(1024)
+        .and_then(|l| TcpListener::from_listener(l, addr, handle))
 }
 
 #[cfg(unix)]
