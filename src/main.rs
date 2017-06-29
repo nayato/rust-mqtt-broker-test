@@ -12,7 +12,6 @@ extern crate num_cpus;
 extern crate native_tls;
 extern crate tokio_tls;
 
-mod codec;
 
 use std::io;
 use mqtt::{Packet, ConnectReturnCode, QoS, SubscribeReturnCode, Codec, WritePacketExt};
@@ -104,7 +103,7 @@ impl Service for DummyService {
                     qos: QoS::AtMostOnce,
                     topic: "abc".to_owned(),
                     packet_id: None,
-                    payload: payload.unwrap().slice_from(0).into(),
+                    payload: payload.slice_from(0).into(),
                 })
             }
             Packet::Subscribe {
@@ -187,7 +186,7 @@ impl MqttProto {
                     qos: QoS::AtMostOnce,
                     topic: "abc".to_owned(),
                     packet_id: None,
-                    payload: payload.unwrap().slice_from(0).into(),
+                    payload: payload.slice_from(0).into(),
                 })
             }
             Packet::Subscribe {
