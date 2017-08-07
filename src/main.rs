@@ -12,28 +12,25 @@ extern crate num_cpus;
 extern crate native_tls;
 extern crate tokio_tls;
 
-
 use std::io;
-use mqtt::{Packet, ConnectReturnCode, QoS, SubscribeReturnCode, Codec, WritePacketExt};
+use mqtt::{Packet, ConnectReturnCode, QoS, SubscribeReturnCode, Codec};
 use tokio_proto::TcpServer;
 use tokio_proto::pipeline::ServerProto;
 use tokio_io::codec::{Decoder, Encoder, Framed};
 use tokio_io::{AsyncRead, AsyncWrite};
-use bytes::{BufMut, BytesMut};
+use bytes::BytesMut;
 use tokio_service::Service;
 use futures::{future, Future, BoxFuture};
 
 use std::net::SocketAddr;
 use futures::{Stream, Sink};
-use futures::future::Then;
-use tokio_core::net::{TcpStream, TcpListener};
+use tokio_core::net::{TcpListener};
 use tokio_core::reactor::{Core, Handle};
 use std::sync::Arc;
 use std::thread;
 
 use native_tls::{TlsAcceptor, Pkcs12};
-use std::io::{Read, BufReader};
-use std::fs::File;
+use std::io::Read;
 
 #[derive(Default)]
 pub struct ProtoMqttCodec(Codec);
@@ -126,10 +123,6 @@ impl Service for DummyService {
 
 fn main() {
     println!("starting");
-    run().unwrap();
-}
-
-fn run() -> std::result::Result<(), std::io::Error> {
     println!("{}", std::mem::size_of::<Packet>());
     let addr = "0.0.0.0:8113".parse().unwrap();
     // serve(addr, /*num_cpus::get()*/ 1, |h| MqttProto);
@@ -157,9 +150,6 @@ fn run() -> std::result::Result<(), std::io::Error> {
 
     mqtt_thread.join().unwrap();
     mqtts_thread.join().unwrap();
-
-
-    Ok(())
 }
 
 impl MqttProto {
@@ -176,7 +166,6 @@ impl MqttProto {
             Packet::Publish {
                 qos,
                 packet_id: Some(pid),
-                ref payload,
                 ..
             } if qos == QoS::AtLeastOnce => Some(Packet::PublishAck { packet_id: pid }),
             Packet::Publish { qos, ref payload, .. } if qos == QoS::AtMostOnce => {
@@ -207,10 +196,7 @@ impl MqttProto {
             Packet::PingRequest => Some(Packet::PingResponse),
             _ => None,
         });
-        // .forward(tx)
-        // //.map_err(|e| { println!("error: {:?}", e); e })
-        // .then(|_| Ok(()));
-        //handle.spawn(rex);
+
         let server = tx.send_all(rex)
             .map_err(|e| {
                 println!("err: {:?}", e);
@@ -223,7 +209,7 @@ impl MqttProto {
 
 // todo from TcpServer:
 
-pub fn with_handle<F>(addr: SocketAddr, threads: usize, new_service: F)
+fn with_handle<F>(addr: SocketAddr, threads: usize, new_service: F)
 where
     F: Fn(&Handle) -> MqttProto + Send + Sync + 'static,
 {
