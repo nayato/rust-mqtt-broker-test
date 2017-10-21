@@ -126,7 +126,7 @@ fn main() {
         // server.serve(|| Ok(DummyService));
     });
 
-    let mut file = std::fs::File::open("identity.com.pfx").expect("TLS cert file must be present in current dir");
+    let mut file = std::fs::File::open("gateway.tests.com.pfx").expect("TLS cert file must be present in current dir");
     let mut pkcs12 = vec![];
     file.read_to_end(&mut pkcs12).expect("could not read TLS cert file");
     let pkcs12 = Pkcs12::from_der(&pkcs12, "password").expect("could not load TLS cert");
