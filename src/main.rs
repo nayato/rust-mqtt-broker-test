@@ -2,7 +2,7 @@ extern crate futures;
 extern crate tokio_io;
 extern crate mqtt;
 extern crate bytes;
-extern crate nom;
+extern crate string;
 
 extern crate tokio_core;
 extern crate tokio_proto;
@@ -18,7 +18,7 @@ use tokio_proto::TcpServer;
 use tokio_proto::pipeline::ServerProto;
 use tokio_io::codec::{Decoder, Encoder, Framed};
 use tokio_io::{AsyncRead, AsyncWrite};
-use bytes::BytesMut;
+use bytes::{Bytes, BytesMut};
 use tokio_service::Service;
 use futures::{future, Future, BoxFuture};
 
@@ -40,7 +40,7 @@ impl Decoder for ProtoMqttCodec {
     type Error = io::Error;
 
     fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
-        let res = self.0.decode(src)?;
+        let res = self.0.decode(src).map_err(|e| io::Error::new(io::ErrorKind::Other, format!("{:?}", e)))?;
         Ok(res.map(Some))
     }
 }
@@ -51,7 +51,7 @@ impl Encoder for ProtoMqttCodec {
 
     fn encode(&mut self, item: Self::Item, dst: &mut BytesMut) -> Result<(), Self::Error> {
         if let Some(p) = item {
-            self.0.encode(p, dst)?;
+            self.0.encode(p, dst).map_err(|e| io::Error::new(io::ErrorKind::Other, format!("{:?}", e)))?;
         }
         Ok(())
     }
@@ -66,16 +66,8 @@ impl<T: AsyncRead + AsyncWrite + 'static> ServerProto<T> for MqttProto {
     type BindTransport = Result<Self::Transport, io::Error>;
 
     fn bind_transport(&self, io: T) -> Self::BindTransport {
-        Ok(io.framed(ProtoMqttCodec(Codec)))
+        Ok(io.framed(ProtoMqttCodec(Codec::new())))
     }
-}
-
-trait NewMqttBroker {
-    fn establish<B: MqttBroker>(proto: MqttProto, connect: Packet) -> BoxFuture<B, io::Error>;
-}
-
-trait MqttBroker {
-    fn publish(packet: Packet);
 }
 
 struct DummyService;
@@ -98,9 +90,9 @@ impl Service for DummyService {
                     dup: false,
                     retain: false,
                     qos: QoS::AtMostOnce,
-                    topic: "abc".to_owned(),
+                    topic: bytes_to_string(Bytes::from_static(b"abc")),
                     packet_id: None,
-                    payload: payload.slice_from(0).into(),
+                    payload: payload.clone(),
                 })
             }
             Packet::Subscribe {
@@ -128,7 +120,7 @@ fn main() {
     // serve(addr, /*num_cpus::get()*/ 1, |h| MqttProto);
     let server = TcpServer::new(MqttProto, addr);
     let mqtt_thread = std::thread::spawn(move || {
-        with_handle(addr, num_cpus::get(), |h| MqttProto);
+        with_handle(addr, num_cpus::get(), |_| MqttProto);
         // let mut tcp = TcpServer::new(MqttProto, addr);
         // tcp.threads(num_cpus::get());
         // server.serve(|| Ok(DummyService));
@@ -154,7 +146,7 @@ fn main() {
 
 impl MqttProto {
     pub fn bind<Io: AsyncRead + AsyncWrite + 'static>(&self, handle: &Handle, socket: Io) {
-        let framed = socket.framed(Codec);
+        let framed = socket.framed(Codec::new());
         let (tx, rx) = framed.split();
         let rex = rx.filter_map(move |req| match req {
             Packet::Connect { .. } => {
@@ -173,9 +165,9 @@ impl MqttProto {
                     dup: false,
                     retain: false,
                     qos: QoS::AtMostOnce,
-                    topic: "abc".to_owned(),
+                    topic: bytes_to_string(Bytes::from_static(b"abc")),
                     packet_id: None,
-                    payload: payload.slice_from(0).into(),
+                    payload: payload.clone(),
                 })
             }
             Packet::Subscribe {
@@ -284,4 +276,8 @@ fn configure_tcp(workers: usize, tcp: &net2::TcpBuilder) -> io::Result<()> {
 #[cfg(windows)]
 fn configure_tcp(_workers: usize, _tcp: &net2::TcpBuilder) -> io::Result<()> {
     Ok(())
+}
+
+fn bytes_to_string(b: Bytes) -> string::String<Bytes> {
+    unsafe { string::String::from_utf8_unchecked(b) }
 }
